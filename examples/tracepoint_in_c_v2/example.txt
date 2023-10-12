@@ -1,0 +1,10 @@
+
+
+
+
+
+
+2023/10/12 15:30:11 pid: 2544022	comm: ping_lv	filename: ./ping_lv
+
+# bcc tools/execsnoop.py
+ping_lv          2564265 2543234   0 /home/lvxiafei/ping_lv 9.9.9.9
