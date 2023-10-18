@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
-/* Copyright (c) 2022 Jacky Yin */
+//go:build ignore
+
 #include <stddef.h>
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
