@@ -37,6 +37,7 @@ struct {
 } events SEC(".maps");
 
 // This tracepoint is defined in mm/page_alloc.c:__alloc_pages_nodemask()
+// https://elixir.bootlin.com/linux/latest/source/include/trace/events/sched.h#L400
 // Userspace pathname: /sys/kernel/tracing/events/sched/sched_process_exec
 SEC("tracepoint/sched/sched_process_exec")
 int sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
