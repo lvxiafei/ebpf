@@ -3,8 +3,8 @@
 // Sample output:
 //
 // examples# go run -exec sudo ./sockfilter -i enp0s1
-// 2023/10/21 17:09:34 enp0s1  TCP    192.168.64.19   5632   -> 192.168.64.1    47071
-// 2023/10/21 17:09:34 enp0s1  TCP    192.168.64.1    47071  -> 192.168.64.19   5632
+// 2023/10/21 20:15:05 enp0s1 TCP    OUTGOING   | fa:4d:89:b9:2d:64 > 52:54:00:cb:05:af | 192.168.64.19   5632   -> 192.168.64.1    47071
+// 2023/10/21 20:15:05 enp0s1 TCP    HOST       | 52:54:00:cb:05:af > fa:4d:89:b9:2d:64 | 192.168.64.1    47071  -> 192.168.64.19   5632
 
 package main
 
@@ -203,12 +203,25 @@ func readLoop(rd *ringbuf.Reader) {
 			continue
 		}
 
-		log.Printf("%-6s  %-6s %-15s %-6d -> %-15s %-6d",
+		log.Printf(
+			"%-6s %-4s %-8s "+
+				"| %-6s > %-6s "+
+				"| %-6s "+
+				"| %-10s > %-10s "+
+				"| %-5d > %-5d",
 			LookupName(int(event.Ifindex)),
 			ProtoString(int(event.IpProto)),
+			pktTypeString(int(event.PktType)),
+
+			macToLowerCaseString(event.DstMac),
+			macToLowerCaseString(event.SrcMac),
+
+			intToIP(event.Nexthop),
+
 			intToIP(event.SrcAddr),
-			event.Port16[0],
 			intToIP(event.DstAddr),
+
+			event.Port16[0],
 			event.Port16[1],
 		)
 	}
@@ -220,4 +233,32 @@ func intToIP(ipNum uint32) net.IP {
 	//binary.BigEndian.PutUint32(ip, ipNum)
 	binary.LittleEndian.PutUint32(ip, ipNum)
 	return ip
+}
+
+func pktTypeString(pktType int) string {
+	// pkttype definitions:
+	// https://github.com/torvalds/linux/blob/v5.14-rc7/include/uapi/linux/if_packet.h#L26
+	pktTypeNames := []string{
+		"HOST",
+		"BROADCAST",
+		"MULTICAST",
+		"OTHERHOST",
+		"OUTGOING",
+		"LOOPBACK",
+		"USER",
+		"KERNEL",
+	}
+	pktTypeStr := fmt.Sprintf("UNKNOWN#%d", pktType)
+	if uint(pktType) < uint(len(pktTypeNames)) {
+		pktTypeStr = pktTypeNames[pktType]
+	}
+	return pktTypeStr
+}
+
+func macToUpperCaseString(mac [6]uint8) string {
+	return fmt.Sprintf("%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5])
+}
+
+func macToLowerCaseString(mac [6]uint8) string {
+	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5])
 }

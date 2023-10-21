@@ -19,6 +19,9 @@ type bpfEvent struct {
 	IpProto uint32
 	PktType uint32
 	Ifindex uint32
+	SrcMac  [6]uint8
+	DstMac  [6]uint8
+	Nexthop uint32
 }
 
 // loadBpf returns the embedded CollectionSpec for bpf.
