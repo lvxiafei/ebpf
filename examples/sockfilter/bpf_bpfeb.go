@@ -15,7 +15,7 @@ import (
 type bpfEvent struct {
 	SrcAddr uint32
 	DstAddr uint32
-	Ports   uint32
+	Port16  [2]uint16
 	IpProto uint32
 	PktType uint32
 	Ifindex uint32
@@ -69,7 +69,7 @@ type bpfProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfMapSpecs struct {
-	Rb *ebpf.MapSpec `ebpf:"rb"`
+	Events *ebpf.MapSpec `ebpf:"events"`
 }
 
 // bpfObjects contains all objects after they have been loaded into the kernel.
@@ -91,12 +91,12 @@ func (o *bpfObjects) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfMaps struct {
-	Rb *ebpf.Map `ebpf:"rb"`
+	Events *ebpf.Map `ebpf:"events"`
 }
 
 func (m *bpfMaps) Close() error {
 	return _BpfClose(
-		m.Rb,
+		m.Events,
 	)
 }
 

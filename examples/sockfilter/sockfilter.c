@@ -5,8 +5,8 @@
 #include <linux/if_ether.h>
 #include <linux/ip.h>
 #include <linux/in.h>
-#include <bpf/bpf_helpers.h>
-#include <bpf/bpf_endian.h>
+#include "bpf_helpers.h"
+#include "bpf_endian.h"
 
 #define IP_MF	  0x2000
 #define IP_OFFSET 0x1FFF
@@ -16,13 +16,13 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 256 * 1024);
-} rb SEC(".maps");
+} events SEC(".maps");
 
 struct event {
 	__be32 src_addr;
 	__be32 dst_addr;
 	union {
-		__be32 ports;
+//		__be32 ports;
 		__be16 port16[2];
 	};
 	__u32 ip_proto;
@@ -57,7 +57,7 @@ int bpf_socket_handler(struct __sk_buff *skb)
 		return 0;
 
 	/* reserve sample from BPF ringbuf */
-	e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+	e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
 	if (!e)
 		return 0;
 
@@ -69,7 +69,8 @@ int bpf_socket_handler(struct __sk_buff *skb)
 	}
 
 	bpf_skb_load_bytes(skb, nhoff + 0, &verlen, 1);
-	bpf_skb_load_bytes(skb, nhoff + ((verlen & 0xF) << 2), &(e->ports), 4);
+//	bpf_skb_load_bytes(skb, nhoff + ((verlen & 0xF) << 2), &(e->ports), 4);
+	bpf_skb_load_bytes(skb, nhoff + ((verlen & 0xF) << 2), &(e->port16), 4);
 	e->pkt_type = skb->pkt_type;
 	e->ifindex = skb->ifindex;
 	bpf_ringbuf_submit(e, 0);

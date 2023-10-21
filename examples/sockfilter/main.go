@@ -2,9 +2,9 @@
 
 // Sample output:
 //
-// sudo ./sockfilter -i eth0
-// interface: eth0 protocol: ICMP  8.8.8.8:0(src) -> 10.112.62.185:7042(dst)                                                                                                             │
-// interface: eth0 protocol: ICMP  8.8.8.8:0(src) -> 10.112.62.185:47409(dst)
+// examples# go run -exec sudo ./sockfilter -i enp0s1
+// 2023/10/21 17:09:34 enp0s1  TCP    192.168.64.19   5632   -> 192.168.64.1    47071
+// 2023/10/21 17:09:34 enp0s1  TCP    192.168.64.1    47071  -> 192.168.64.19   5632
 
 package main
 
@@ -12,16 +12,21 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"github.com/cilium/cilium/pkg/lock"
+	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/internal"
-	"github.com/cilium/ebpf/link"
+	"github.com/cilium/ebpf/internal/unix"
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/cilium/ebpf/rlimit"
 	flag "github.com/spf13/pflag"
+	"github.com/vishvananda/netlink"
 	"log"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
+	"unsafe"
 )
 
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -tags "linux" -type event bpf sockfilter.c -- -I../headers
@@ -31,17 +36,103 @@ type Config struct {
 }
 
 var (
-	config Config
+	config      Config
+	indexToName map[int]string
+	mu          lock.RWMutex
 )
 
-const (
-	LOOP = 1
-)
+// htons converts the unsigned short integer hostshort from host byte order to network byte order.
+func htons(i uint16) uint16 {
+	b := make([]byte, 2)
+	binary.BigEndian.PutUint16(b, i)
+	return *(*uint16)(unsafe.Pointer(&b[0]))
+}
+
+func GetIfIndex(ifName string) (uint32, error) {
+	iface, err := netlink.LinkByName(ifName)
+	if err != nil {
+		return 0, err
+	}
+	return uint32(iface.Attrs().Index), nil
+}
+
+func InitIndexToName() error {
+	links, err := netlink.LinkList()
+	if err != nil {
+		return err
+	}
+
+	indexToName = make(map[int]string, len(links))
+	for _, link := range links {
+		indexToName[link.Attrs().Index] = link.Attrs().Name
+	}
+
+	return nil
+}
+
+func init() {
+	if err := InitIndexToName(); err != nil {
+		log.Fatalf("failed to get ifname: %v", err)
+	}
+}
+
+func LookupName(ifIndex int) string {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	name, ok := indexToName[ifIndex]
+	if ok {
+		return name
+	}
+	return "nil"
+}
+
+func OpenRawSock(index int) (int, error) {
+	sock, err := syscall.Socket(syscall.AF_PACKET, syscall.SOCK_RAW|syscall.SOCK_NONBLOCK|syscall.SOCK_CLOEXEC, int(htons(syscall.ETH_P_ALL)))
+	if err != nil {
+		return 0, err
+	}
+	sll := syscall.SockaddrLinklayer{
+		Ifindex:  index, // 0 matches any interface
+		Protocol: htons(syscall.ETH_P_ALL),
+	}
+	if err := syscall.Bind(sock, &sll); err != nil {
+		return 0, err
+	}
+	return sock, nil
+}
+
+// AttachSocketFilterByFD attach a socket filter to a function
+func AttachSocketFilterByFD(fd int, program *ebpf.Program) error {
+	var ssoErr error
+	ssoErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_ATTACH_BPF, program.FD())
+	if ssoErr != nil {
+		return ssoErr
+	}
+	return nil
+}
+
+func ProtoString(proto int) string {
+	// proto definitions:
+	// https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
+	protoStr := fmt.Sprintf("UNKNOWN#%d", proto)
+	switch proto {
+	case syscall.IPPROTO_TCP:
+		protoStr = "TCP"
+	case syscall.IPPROTO_UDP:
+		protoStr = "UDP"
+	case syscall.IPPROTO_ICMP:
+		protoStr = "ICMP"
+	}
+	return protoStr
+}
 
 func main() {
+	flag.StringVarP(&config.Iface, "interface", "i", "any", "interface to capture")
+	flag.Parse()
 
-	// Config.Iface = "lo"
-	flag.StringVarP(&config.Iface, "interface", "i", "lo", "interface to capture")
+	ifIndex, _ := GetIfIndex(config.Iface)
+	log.Printf("get ifname %s ifindex: %d", config.Iface, ifIndex)
 
 	stopper := make(chan os.Signal, 1)
 	signal.Notify(stopper, os.Interrupt, syscall.SIGTERM)
@@ -51,11 +142,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	conn, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	fd, err := OpenRawSock(int(ifIndex))
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("unable to open a raw socket: %s", err)
+		return
 	}
-	defer conn.Close()
+	defer syscall.Close(fd)
 
 	// Load pre-compiled programs and maps into the kernel.
 	objs := bpfObjects{}
@@ -65,14 +157,14 @@ func main() {
 	defer objs.Close()
 
 	// Attach ebpf program to a socket
-	err = link.AttachSocketFilter(conn, objs.bpfPrograms.BpfSocketHandler)
+	err = AttachSocketFilterByFD(fd, objs.bpfPrograms.BpfSocketHandler)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	log.Printf("eBPF program loaded and attached on socket")
 
-	rd, err := ringbuf.NewReader(objs.bpfMaps.Rb)
+	rd, err := ringbuf.NewReader(objs.bpfMaps.Events)
 	if err != nil {
 		log.Fatalf("opening ringbuf reader: %s", err)
 	}
@@ -111,13 +203,13 @@ func readLoop(rd *ringbuf.Reader) {
 			continue
 		}
 
-		log.Printf("%-6d  %-6d %-15s %-6s -> %-15s %-6d",
-			event.Ifindex,
-			event.IpProto,
+		log.Printf("%-6s  %-6s %-15s %-6d -> %-15s %-6d",
+			LookupName(int(event.Ifindex)),
+			ProtoString(int(event.IpProto)),
 			intToIP(event.SrcAddr),
-			event.Ports,
+			event.Port16[0],
 			intToIP(event.DstAddr),
-			//event.Dport,
+			event.Port16[1],
 		)
 	}
 }
@@ -125,6 +217,7 @@ func readLoop(rd *ringbuf.Reader) {
 // intToIP converts IPv4 number to net.IP
 func intToIP(ipNum uint32) net.IP {
 	ip := make(net.IP, 4)
-	binary.BigEndian.PutUint32(ip, ipNum)
+	//binary.BigEndian.PutUint32(ip, ipNum)
+	binary.LittleEndian.PutUint32(ip, ipNum)
 	return ip
 }
