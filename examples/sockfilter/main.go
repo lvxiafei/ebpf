@@ -3,12 +3,13 @@
 // Sample output:
 //
 // examples# go run -exec sudo ./sockfilter -i enp0s1
-// 2023/10/21 20:15:05 enp0s1 TCP    OUTGOING   | fa:4d:89:b9:2d:64 > 52:54:00:cb:05:af | 192.168.64.19   5632   -> 192.168.64.1    47071
-// 2023/10/21 20:15:05 enp0s1 TCP    HOST       | 52:54:00:cb:05:af > fa:4d:89:b9:2d:64 | 192.168.64.1    47071  -> 192.168.64.19   5632
+// 2023/10/21 23:20:20 enp0s1 TCP  HOST     | fa:4d:89:b9:2d:64 > 52:54:00:cb:05:af | 192.168.64.19 | 192.168.64.1 > 192.168.64.19 | 43981 > 5632
+// 2023/10/21 23:20:20 enp0s1 TCP  OUTGOING | 52:54:00:cb:05:af > fa:4d:89:b9:2d:64 | 192.168.64.1  | 192.168.64.19 > 192.168.64.1 | 5632  > 43981
 
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
@@ -21,10 +22,12 @@ import (
 	"github.com/cilium/ebpf/rlimit"
 	flag "github.com/spf13/pflag"
 	"github.com/vishvananda/netlink"
+
 	"log"
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -170,13 +173,13 @@ func main() {
 	}
 	defer rd.Close()
 
-	log.Printf("%-15s %-6s -> %-15s %-6s %-6s",
-		"interface",
-		"protocol",
-		"src",
-		"->",
-		"dst",
-	)
+	//log.Printf("%-15s %-6s -> %-15s %-6s %-6s",
+	//	"interface",
+	//	"protocol",
+	//	"src",
+	//	"->",
+	//	"dst",
+	//)
 	go readLoop(rd)
 
 	// Wait
@@ -202,21 +205,26 @@ func readLoop(rd *ringbuf.Reader) {
 			log.Printf("parsing ringbuf event: %s", err)
 			continue
 		}
+		if ProtoString(int(event.IpProto)) == "TCP" {
+			continue
+		}
 
 		log.Printf(
-			"%-6s %-4s %-8s "+
+			"%-2d%-6s %-4s %-8s "+
 				"| %-6s > %-6s "+
-				"| %-6s "+
-				"| %-10s > %-10s "+
+				"| %-13s "+
+				"| %-13s > %-13s "+
 				"| %-5d > %-5d",
+			event.Ifindex,
 			LookupName(int(event.Ifindex)),
 			ProtoString(int(event.IpProto)),
 			pktTypeString(int(event.PktType)),
 
-			macToLowerCaseString(event.DstMac),
 			macToLowerCaseString(event.SrcMac),
+			macToLowerCaseString(event.DstMac),
 
-			intToIP(event.Nexthop),
+			//intToIP(event.Nexthop),
+			Mac2Ip(macToLowerCaseString(event.DstMac)),
 
 			intToIP(event.SrcAddr),
 			intToIP(event.DstAddr),
@@ -261,4 +269,72 @@ func macToUpperCaseString(mac [6]uint8) string {
 
 func macToLowerCaseString(mac [6]uint8) string {
 	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5])
+}
+
+func Mac2Ip(macAddress string) string {
+	ip, err := findIPByMAC(macAddress)
+	if err != nil {
+		ipLocal, err := IfaceMacToIP(macAddress)
+		if err != nil {
+			return "0.0.0.0"
+		} else {
+			return ipLocal
+		}
+
+	} else {
+		return ip
+	}
+}
+
+func findIPByMAC(macAddress string) (string, error) {
+	file, err := os.Open("/proc/net/arp")
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		fields := strings.Fields(line)
+		if len(fields) >= 6 && fields[3] == macAddress {
+			return fields[0], nil
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+
+	return "", fmt.Errorf("MAC address not found in ARP table")
+}
+
+func IfaceMacToIP(mac string) (string, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "", err
+	}
+
+	for _, iface := range ifaces {
+		// 获取接口的硬件地址（MAC 地址）
+		hwAddr := iface.HardwareAddr.String()
+		//fmt.Println(hwAddr)
+		if hwAddr == mac {
+			addrs, err := iface.Addrs()
+			if err != nil {
+				return "", err
+			}
+
+			// 通常情况下，一个接口可能有多个 IP 地址，这里只返回第一个
+			if len(addrs) > 0 {
+				ip, _, err := net.ParseCIDR(addrs[0].String())
+				if err != nil {
+					return "", err
+				}
+				return ip.String(), nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("未找到 MAC 地址 %s 对应的 IP 地址", mac)
 }

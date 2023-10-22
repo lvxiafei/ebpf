@@ -5,12 +5,15 @@
 #include <linux/if_ether.h>
 #include <linux/ip.h>
 #include <linux/in.h>
-#include <net/route.h>
+//#include <net/route.h>
 #include "bpf_helpers.h"
 #include "bpf_endian.h"
 
 #define IP_MF	  0x2000
 #define IP_OFFSET 0x1FFF
+
+#define SKB_DST_NOREF	1UL
+#define SKB_DST_PTRMASK	~(SKB_DST_NOREF)
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
@@ -73,10 +76,10 @@ int bpf_socket_handler(struct __sk_buff *skb)
     bpf_skb_load_bytes(skb, 6, &(e->src_mac),6);
 
     // nexthop
-    _skb_refdst = skb->_skb_refdst;
-    struct dst_entry *dst = (struct dst_entry *)(_skb_refdst & SKB_DST_PTRMASK);
-    struct rtable *rt = (struct rtable *)dst;
-    e->nexthop = rt->rt_gateway;
+//    _skb_refdst = skb->_skb_refdst;
+//    struct dst_entry *dst = (struct dst_entry *)(_skb_refdst & SKB_DST_PTRMASK);
+//    struct rtable *rt = (struct rtable *)dst;
+//    e->nexthop = rt->rt_gateway;
 
 	bpf_skb_load_bytes(skb, nhoff + offsetof(struct iphdr, protocol), &e->ip_proto, 1);
 
