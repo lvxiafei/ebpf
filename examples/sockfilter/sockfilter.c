@@ -9,6 +9,7 @@
 #include "bpf_helpers.h"
 #include "bpf_endian.h"
 
+
 #define IP_MF	  0x2000
 #define IP_OFFSET 0x1FFF
 
@@ -30,12 +31,19 @@ struct event {
 		__be16 port16[2];
 	};
 	__u32 ip_proto;
+	__u32 eth_proto;
 	__u32 pkt_type;
 	__u32 ifindex;
 
     unsigned char src_mac[6];
     unsigned char dst_mac[6];
     __u32 nexthop;
+    __u32 netns;
+
+	__u32 pid;
+	__u8 comm[80];
+
+	__u32 vlan_id;
 };
 const struct event *unused __attribute__((unused));
 
@@ -62,6 +70,22 @@ int bpf_socket_handler(struct __sk_buff *skb)
 	proto = __bpf_ntohs(proto);
 	if (proto != ETH_P_IP) /* Internet Protocol packet	*/
 		return 0;
+//	if (proto != ETH_P_ARP)
+//		return 0;
+
+    /* handle VLAN tagged packet */
+//    if (proto == ETH_P_8021Q) || eth_type == ETH_P_8021AD) {
+//
+//        struct vlan_hdr *vlan_hdr;
+//        vlan_hdr = (void *)eth + offset;
+//        offset += sizeof(*vlan_hdr);
+//
+//        if ((void *)eth + offset > end)
+//            return false;
+//
+//        proto = vlan_hdr->h_vlan_encapsulated_proto;
+//
+//    }
 
 	if (ip_is_fragment(skb, nhoff))
 		return 0;
@@ -74,6 +98,8 @@ int bpf_socket_handler(struct __sk_buff *skb)
     // l2
     bpf_skb_load_bytes(skb, 0, &(e->dst_mac),6);
     bpf_skb_load_bytes(skb, 6, &(e->src_mac),6);
+//    bpf_skb_load_bytes(skb, 6, &(e->vlan_hdr),6);
+	bpf_skb_load_bytes(skb, 12, &e->eth_proto, 2);
 
     // nexthop
 //    _skb_refdst = skb->_skb_refdst;
@@ -93,6 +119,12 @@ int bpf_socket_handler(struct __sk_buff *skb)
 	bpf_skb_load_bytes(skb, nhoff + ((verlen & 0xF) << 2), &(e->port16), 4);
 	e->pkt_type = skb->pkt_type;
 	e->ifindex = skb->ifindex;
+
+//	e->netns = skb->sk->__sk_common.skc_net.net->ns.inum;
+
+//	e->pid = bpf_get_current_pid_tgid() >> 32;
+//	bpf_get_current_comm(&e->comm, sizeof(e->comm));
+
 	bpf_ringbuf_submit(e, 0);
 
 	return skb->len;

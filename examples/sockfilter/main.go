@@ -44,6 +44,13 @@ var (
 	mu          lock.RWMutex
 )
 
+const (
+	// proto
+	IPPROTO_VRRP             = 0x70
+	IPPROTO_PGM              = 0x71
+	IPV6_MAX_SOCK_SRC_FILTER = 0x80
+)
+
 // htons converts the unsigned short integer hostshort from host byte order to network byte order.
 func htons(i uint16) uint16 {
 	b := make([]byte, 2)
@@ -91,7 +98,7 @@ func LookupName(ifIndex int) string {
 }
 
 func OpenRawSock(index int) (int, error) {
-	sock, err := syscall.Socket(syscall.AF_PACKET, syscall.SOCK_RAW|syscall.SOCK_NONBLOCK|syscall.SOCK_CLOEXEC, int(htons(syscall.ETH_P_ALL)))
+	sock, err := syscall.Socket(syscall.AF_PACKET, syscall.SOCK_RAW|syscall.SOCK_NONBLOCK|syscall.SOCK_CLOEXEC, int(htons(syscall.ETH_P_ALL))) // ETH_P_ALL, 表示能够接收本机收到的所有二层报文，包括IP，ARP，自定义二层报文等
 	if err != nil {
 		return 0, err
 	}
@@ -122,10 +129,34 @@ func ProtoString(proto int) string {
 	switch proto {
 	case syscall.IPPROTO_TCP:
 		protoStr = "TCP"
-	case syscall.IPPROTO_UDP:
+	case syscall.IPPROTO_UDP: // 0x11
 		protoStr = "UDP"
 	case syscall.IPPROTO_ICMP:
 		protoStr = "ICMP"
+	case IPPROTO_VRRP:
+		protoStr = "VRRP"
+		//case IPV6_MAX_SOCK_SRC_FILTER:
+		//	protoStr = "IPV6_MAX_SOCK_SRC_FILTER"
+
+	}
+	return protoStr
+}
+func EthProtoString(proto int) string {
+	// ether proto definitions:
+	// https://sites.uclouvain.be/SystInfo/usr/include/linux/if_ether.h.html
+	// IEEE 802 Numbers https://www.iana.org/assignments/ieee-802-numbers/ieee-802-numbers.xhtml
+	protoStr := fmt.Sprintf("UNKNOWN#%d", proto)
+	switch proto {
+	case syscall.ETH_P_ALL:
+		protoStr = "ALL"
+	case syscall.ETH_P_IP: // Ox0800
+		protoStr = "IP"
+	case syscall.ETH_P_ARP:
+		protoStr = "ARP"
+	case syscall.ETH_P_RARP:
+		protoStr = "RARP"
+	case syscall.ETH_P_IPV6:
+		protoStr = "IPV6"
 	}
 	return protoStr
 }
@@ -205,18 +236,21 @@ func readLoop(rd *ringbuf.Reader) {
 			log.Printf("parsing ringbuf event: %s", err)
 			continue
 		}
+
+		// filter
 		if ProtoString(int(event.IpProto)) == "TCP" {
 			continue
 		}
 
 		log.Printf(
-			"%-2d%-6s %-4s %-8s "+
+			"%-2d%-6s %-4s %-4s %-8s "+
 				"| %-6s > %-6s "+
 				"| %-13s "+
 				"| %-13s > %-13s "+
 				"| %-5d > %-5d",
 			event.Ifindex,
 			LookupName(int(event.Ifindex)),
+			EthProtoString(int(htons(uint16(event.EthProto)))),
 			ProtoString(int(event.IpProto)),
 			pktTypeString(int(event.PktType)),
 
@@ -336,5 +370,5 @@ func IfaceMacToIP(mac string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("未找到 MAC 地址 %s 对应的 IP 地址", mac)
+	return "", fmt.Errorf("MAC address not found in iface")
 }
