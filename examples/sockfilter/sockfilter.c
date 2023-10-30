@@ -68,8 +68,8 @@ int bpf_socket_handler(struct __sk_buff *skb)
 
 	bpf_skb_load_bytes(skb, 12, &proto, 2);
 	proto = __bpf_ntohs(proto);
-	if (proto != ETH_P_IP) /* Internet Protocol packet	*/
-		return 0;
+//	if (proto != ETH_P_IP) /* Internet Protocol packet	*/
+//		return 0;
 //	if (proto != ETH_P_ARP)
 //		return 0;
 
@@ -87,8 +87,8 @@ int bpf_socket_handler(struct __sk_buff *skb)
 //
 //    }
 
-	if (ip_is_fragment(skb, nhoff))
-		return 0;
+//	if (ip_is_fragment(skb, nhoff))
+//		return 0;
 
 	/* reserve sample from BPF ringbuf */
 	e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
